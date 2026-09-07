@@ -111,6 +111,8 @@ X-iDoris-Tenant: <tenant_id>     # deploy_mode=tenant 时必填，缺失即 400�
 - **不写死单一推理后端**：任何 `omlx` 字样只能出现在 `adapters/omlx/` 下；Router 核心只认 LoadPolicy 契约。
 - **base 指纹不匹配拒绝聚合/挂载**（M3）：防止一次静默升级毁掉整批 LoRA。
 - **联邦真实数据门禁**（M3）：隐私层（DP-FedLoRA + 安全聚合）未就位时，真实个人数据不得进入联邦；F0 只用合成/脱敏数据。
+- **License 红线（自下游尽调引入）**：**LiteLLM 的 `enterprise/` 目录绝不引用**；**Dify 禁多租户**——多租户已归 iDoris，此条直接排除它作为选型；ComfyUI GPL 只能以独立进程调用，不得传染。
+- **能力①的适配器必须沙箱化**：`claude` / `codex` 是具备工具与工作区能力的 agent 程序，不是纯模型 provider。无工具、无工作区写权限、无任意子进程能力——否则它就是一条绕过 Agent24 审批门的通道。
 - **战略平台依赖不抽象**：Nostr（去中心通信）与 AirAccount DID（身份信任根）是 Mycelium 的既定赌注，直接依赖，**不套可替换抽象层**——把它们当可换组件反而增加无谓复杂度（06 §10.9）。
 
 ## 运行形态

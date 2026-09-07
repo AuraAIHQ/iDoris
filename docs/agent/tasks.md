@@ -181,10 +181,11 @@
 - **优先级**：mid
 - **目标**：把已登录的 `claude` / `codex` 订阅态封成 OpenAI-compat provider（U0 已验证 `claude -p` 与 `codex exec` 可行）。
 - **开发范围**：spawn CLI → 解析输出 → 封 OpenAI-compat 响应；120s 超时；取消/超时走 `SIGTERM → 5s → SIGKILL`，**不留孤儿进程**。
+- **🔴 沙箱硬要求（评审 5.1，涉安全）**：`claude` / `codex` **不是纯模型 provider，是具备工具与工作区能力的 agent 程序**。若直接当 provider 放进推理路径，调用方就获得一条**绕过 Agent24 审批门执行工具**的通道（审批门管不到 iDoris spawn 出来的 CLI）。故该适配器**必须**运行在无工具、无工作区写权限、无任意子进程能力的沙箱里；**做不到就不得放进可信推理路径**。
 - **明确不做**：不做 streaming（CLI 非交互模式先按整块返回）；不做 OAuth 路径（CLIProxyAPI 模式，备选）。
 - **依赖**：T1.3.1
 - **交付物**：`packages/adapters/subscription/`
-- **验收命令**：`pnpm --filter @idoris/adapters test:integration`（本机有 `claude` 时断言 `claude -p "reply with exactly: IDORIS_RELAY_OK"` 经网关返回该字符串；进程清理断言 `ps` 无残留子进程；无 CLI 时打印 SKIPPED）
+- **验收命令**：`pnpm --filter @idoris/adapters test:integration`（① 本机有 `claude` 时断言 `claude -p "reply with exactly: IDORIS_RELAY_OK"` 经网关返回该字符串；② 进程清理断言 `ps` 无残留子进程；③ **沙箱断言：喂一个诱导写文件/调工具的 prompt，断言文件系统无变化、无子进程被 spawn**；④ 无 CLI 时打印 SKIPPED）
 - **涉及文件**：`packages/adapters/subscription/`
 - **风险/回滚**：孤儿进程会吃满机器 —— 清理断言是硬性验收项
 - **证据**：<…>
@@ -243,7 +244,7 @@
 - **优先级**：high
 - **目标**：A 租户查不到 B 租户的**任何一条**用量/预算/审计记录。
 - **开发范围**：用量/预算/审计三类数据的访问层强制携带 tenant 作用域；**缺 tenant 上下文的查询直接抛错，而非返回全量**——靠调用方每次记得加 `where tenant_id = ?` 是失败开放。
-- **明确不做**：不做跨租户聚合报表（组织管理员视角，另议）。
+- **明确不做**：不做跨租户聚合报表（组织管理员视角，另议）；**不替其他组件完成隔离**——iDoris 只隔离预算/用量/provider 凭证，Agent24 的会话与审批记录、Hyphae 的收件箱、agentEar 的录音缓冲、MemPalace 的记忆命名空间**各自负责各自的租户隔离**（见 [`ecosystem-boundaries.md`](ecosystem-boundaries.md) §5.2）。这条要写进对外契约，否则「多租户底座」只隔离了账单没隔离数据。
 - **依赖**：T1.5.1
 - **交付物**：`packages/tenancy/src/store.ts`
 - **验收命令**：`pnpm test:tenancy`（① 造两个 tenant 的三类数据，断言 A 查不到 B 的任何一条；② **不带 tenant 上下文的查询抛错**而非返回全量；③ 变异测试：把作用域校验去掉必须变红）
@@ -426,4 +427,7 @@
 | FU-5 | 跨仓库 R6 | 账期/时区：R0 归 iDoris 后，多租户用量聚合就在本层，**已从跟进项升为正式 task T2.6.1** | CLOSED |
 | FU-6 | 跨仓库 R1 | `budget_exceeded` 终态已写进 spec 状态机，**已落为 T1.5.2**；本仓库另加了一处细化：`budget.scope` 区分 `paid_only`/`all`，因为 iDoris 有零成本本地模型，一刀切会让超预算租户连不花钱的本地推理都用不了 | CLOSED |
 | FU-7 | 跨仓库移交 | 接收 iDoris-website 的 `routing.py`(10 条变异) / `audit.py` / `egress_guard.py`(16 条变异)，Apache-2.0；对方保留一份直到我方跑通，避免出现「两边都没有」的窗口 | OPEN |
+| FU-9 | 生态边界 | [`ecosystem-boundaries.md`](ecosystem-boundaries.md) §7 四条待拍板：B1 双 harness 二选一（**最迫近**，下游已在跑 B）· B2 MemPalace 独立与否 · B3 agentEar 立项与归属 · B4 模型制品层时机 | OPEN |
+| FU-10 | 跨仓库 | iDoris-website `docs/business/INDEX-产品设计总览.md` §3 的「113 条变异」与「没有一条连过模型」范围不符：Documents 72 + Creative 15 = **87** 才是该句点名的范围；Assistant 16 + Gateway 10 那 26 条不在「连没连过模型」这个轴上（测的是启动期环境变量与路由顺序），被那句话罩住反显得更空。已转告作者 | OPEN |
+| FU-11 | License 红线（自下游 `oss-due-diligence.md` 引入）| **LiteLLM `enterprise/` 目录绝不引用**（若将来做能力②）· **Dify 禁多租户**——多租户现已归 iDoris，此条直接约束选型 · ComfyUI GPL 只能隔离进程调用 | OPEN |
 | FU-8 | 验收方法论 | **「绿灯不代表你以为的那件事成立」**——两半：① **断言错了**（异常子类被父类 `expect_raises` 吞掉；无出处答案被数字校验误接住，换成不含数字的答案就放行）；② **检查不承重**（某步骤去掉后整套自检仍全绿）。<br>**根因常是量纲不匹配**：判据全写成「至少有 N 个」，而想抓的错误方向是「你多算了」——「至少」型判据测不出多算，那格正对照**从一开始就不可能承重**。**检查的量纲要和它想抓的错误方向对得上。**<br>我方对应防御：`test:privacy` 的出站计数器（不只断言 503）、`test:billing` 的 `range_utc`（不只断言 totals）、`test:egress` 的正对照、T1.5.2/3/4 的配对变异测试。共同点是**不给自己留一条「看起来做了」的退路**。<br>**待办**：把这条写进未来每个 task 的验收设计检查——新增验收命令时问一句「这个断言能不能因为别的原因变绿？它的量纲对得上要抓的错误方向吗？」 | OPEN |
