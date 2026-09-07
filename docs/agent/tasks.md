@@ -120,11 +120,11 @@
 ### T1.3.2 控制面 header 解析 + routing policy 解释引擎  `BACKLOG`
 - **优先级**：high
 - **目标**：意图/隐私/复杂度走 header 不走 prompt；路由规则是 YAML 数据不是代码。
-- **开发范围**：解析 `X-iDoris-Privacy/Intent/Complexity/Capabilities/Fallback` → `TaskProfile`（**缺省 privacy = `local_only`**，保守默认）；加载 `config/routing-policy.yaml`，按序匹配首条命中，`default` 必填；产出候选 provider 列表。
-- **明确不做**：不做语义自动识别意图（M2/T2.4.1）；不把策略逻辑写进代码分支。
-- **依赖**：T1.3.1
+- **开发范围**：解析 `X-iDoris-Privacy/Intent/Complexity/Capabilities/Fallback/Tenant` → `TaskProfile` + `TenantContext`（**缺省 privacy = `local_only`**，保守默认；`deploy_mode=tenant` 时缺 `X-iDoris-Tenant` → 400，**不得回落到「默认租户」**）；加载 `config/routing-policy.yaml`，按序匹配首条命中，`default` 必填；**严格按 [`spec.md`](spec.md)「路由决策的执行顺序」实现：隐私判定 → 预算闸门 → 意图/能力匹配**；产出候选 provider 列表。
+- **明确不做**：不做语义自动识别意图（M2/T2.4.1）；不把策略逻辑写进代码分支；不做预算的持久化（T1.5.2）。
+- **依赖**：T1.3.1、T1.5.1
 - **交付物**：`packages/router/src/{profile,policy}.ts`、`config/routing-policy.yaml`
-- **验收命令**：`pnpm --filter @idoris/router test`（覆盖：header 缺省 → local_only；非法值 → 400；规则按序首条命中；无 `default` 的 policy 文件加载失败）
+- **验收命令**：`pnpm --filter @idoris/router test`（覆盖：header 缺省 → local_only；非法值 → 400；规则按序首条命中；无 `default` 的 policy 文件加载失败；**tenant 模式缺 tenant header → 400 而非默认租户**）+ `pnpm test:privacy` 的顺序用例（`privacy=local_only` 且意图指向外部能力 → 走本地或报错，**证明隐私判定排在意图匹配之前**）
 - **涉及文件**：`packages/router/src/`、`config/routing-policy.yaml`
 - **风险/回滚**：策略文件版本化，破坏性改动升 `version`
 - **证据**：<…>
@@ -192,11 +192,11 @@
 ### T1.4.2 loopback + 单用户门禁（合规红线落地）  `BACKLOG`
 - **优先级**：high
 - **目标**：让「社区端/城市端绝不转发个人订阅」成为代码约束而非文档劝告。
-- **开发范围**：订阅 provider 的组件卡固定 `allowed_egress: [loopback]`；Router 在 dispatch 前复核请求来源为 loopback（或用户显式开启的 Tailscale 私网白名单）；部署模式为 `community|city` 时该 provider **拒绝注册并明确报错**。
-- **明确不做**：不做多租户鉴权（不在本轮范围）。
+- **开发范围**：订阅 provider 的组件卡固定 `allowed_egress: [loopback]`；Router 在 dispatch 前复核请求来源为 loopback（或用户显式开启的 Tailscale 私网白名单）；**`deploy_mode != personal`（即 `tenant` / `community` / `city`）时该 provider 拒绝注册并明确报错**——多租户不是放开这条红线的理由，组织租户用组织自己的 API（能力②）或本地模型（能力③）。
+- **明确不做**：不做租户鉴权本身（T1.5.1 负责 TenantContext 的来源与校验）。
 - **依赖**：T1.4.1、T1.1.3
 - **交付物**：`packages/router/src/egress-guard.ts`、`config/components/subscription.yaml`
-- **验收命令**：`pnpm --filter @idoris/router test`（断言：非 loopback 来源的订阅请求被拒；`IDORIS_DEPLOY_MODE=community` 时启动即拒绝注册订阅 provider 并退出非 0）
+- **验收命令**：`pnpm --filter @idoris/router test`（断言：非 loopback 来源的订阅请求被拒；`IDORIS_DEPLOY_MODE` 取 `tenant` / `community` / `city` **三者中任一**时，启动即拒绝注册订阅 provider 并退出非 0）
 - **涉及文件**：`packages/router/src/egress-guard.ts`
 - **风险/回滚**：**涉合规**——此门禁是能力①得以存在的前提，测试不得跳过
 - **证据**：<…>
@@ -207,6 +207,56 @@
 - **开发范围**：routing policy 中订阅 provider 永不出现在 `default` 链；测试断言禁用订阅 provider 后所有非订阅场景仍全绿。
 - **依赖**：T1.4.2
 - **验收命令**：`IDORIS_DISABLE_SUBSCRIPTION=1 pnpm test`（全绿）
+- **证据**：<…>
+
+---
+
+## F1.5 — 多租户基线（组织大脑）
+
+> 2026-09-07 拍板 R0 新增：多租户是 iDoris 定位的一部分（「iDoris 是组织大脑，未来为组织提供服务」），不是为单个业务开的后门。
+> **下游 iDoris-website 已把自己的 `products/gateway/` 降级为消费者并挂起等本节的接口契约**，故 T1.5.1 优先级最高。
+
+### T1.5.1 `deploy_mode` + TenantContext 契约  `READY`
+- **优先级**：high
+- **目标**：先把**接口契约**定下来对外发布——下游已停工等它，契约不定他们改完还要再改一遍。
+- **开发范围**：`deploy_mode: personal | tenant` 配置项；`TenantContext` 的 TS 类型 + zod schema（`tenant_id` / `budget{limit_minor,spent_minor,scope}` / `billing_timezone` / `quota`）；`X-iDoris-Tenant` header 语义（tenant 模式必填，缺失 400，**不得回落默认租户**；personal 模式忽略）；产出一份对外契约文档。
+- **明确不做**：不实现预算扣减（T1.5.2）、不实现隔离存储（T1.5.3）、不做租户鉴权/发证（组织侧负责，本层只消费已验明的 tenant_id）。
+- **依赖**：T1.1.2
+- **交付物**：`packages/contracts/src/tenant.ts`（**待做**）；`docs/agent/contract-tenancy.md`（对外契约，**已随本规划 PR 交付 v1**，下游可据此改薄客户端）
+- **验收命令**：`pnpm --filter @idoris/contracts test:contract`（合法/非法 TenantContext 各若干；`billing_timezone` 缺失或非 IANA 名 → 拒绝；`budget.scope` 非枚举值 → 拒绝）且 `test -f docs/agent/contract-tenancy.md`
+- **涉及文件**：`packages/contracts/src/tenant.ts`
+- **风险/回滚**：契约发布后下游会照着写，破坏性改动要升版本 —— 本 task 内定版 v1
+- **证据**：<…>
+
+### T1.5.2 预算闸门（终态拒绝，非降级）  `BACKLOG`
+- **优先级**：high
+- **目标**：预算耗尽 → 拒绝调用并返回明确错误，**不产生任何计费调用**，也不自动降级到便宜档。
+- **开发范围**：`BUDGET_CHECK` 节点置于 `POLICY_MATCHED` 之后、`CANDIDATES` 之前；超限返回 402 `budget_exceeded`，错误信息**必须说清「是预算不是故障」**；实现 `budget.scope` 两种语义——`paid_only`（默认，只闸 `cost>0` 的候选，本地模型不受影响）与 `all`（一律拒绝）。
+- **明确不做**：不做预算充值/管理界面；不做限流（quota 另议）。
+- **依赖**：T1.5.1、T1.3.2
+- **交付物**：`packages/tenancy/src/budget.ts`
+- **验收命令**：`pnpm --filter @idoris/tenancy test`（① 超预算 → 402 且**假上游计费计数器 == 0**；② 错误体含明确的预算语义标识，不与 5xx 故障混淆；③ `scope=paid_only` 时超预算仍可调本地零成本模型；④ `scope=all` 时一律拒绝；⑤ 变异测试：把「超预算拒绝」改成「降级到便宜档」必须变红）
+- **风险/回滚**：**涉钱**——闸门失效等于替客户花钱；计费计数器断言不可省
+- **证据**：<…>
+
+### T1.5.3 租户硬隔离的数据访问层  `BACKLOG`
+- **优先级**：high
+- **目标**：A 租户查不到 B 租户的**任何一条**用量/预算/审计记录。
+- **开发范围**：用量/预算/审计三类数据的访问层强制携带 tenant 作用域；**缺 tenant 上下文的查询直接抛错，而非返回全量**——靠调用方每次记得加 `where tenant_id = ?` 是失败开放。
+- **明确不做**：不做跨租户聚合报表（组织管理员视角，另议）。
+- **依赖**：T1.5.1
+- **交付物**：`packages/tenancy/src/store.ts`
+- **验收命令**：`pnpm test:tenancy`（① 造两个 tenant 的三类数据，断言 A 查不到 B 的任何一条；② **不带 tenant 上下文的查询抛错**而非返回全量；③ 变异测试：把作用域校验去掉必须变红）
+- **风险/回滚**：**涉隐私/涉钱**——隔离失效等于跨客户数据泄漏
+- **证据**：<…>
+
+### T1.5.4 决策 reason 可解释  `BACKLOG`
+- **优先级**：mid
+- **目标**：每次路由决策带非空 `reason`，能区分「隐私强制 / 预算 / 意图匹配 / 降级」四类。
+- **开发范围**：决策链各节点产出结构化 reason，进审计记录并可在响应头回传。
+- **明确不做**：不做自然语言解释生成（枚举 + 结构化字段即可）。
+- **依赖**：T1.3.3
+- **验收命令**：`pnpm --filter @idoris/router test`（四类 reason 各一条用例；**reason 为空的决策被拒绝**；变异测试：把 reason 置空必须变红）
 - **证据**：<…>
 
 ---
@@ -263,11 +313,11 @@
 
 ### T2.2.3 路由决策审计日志  `BACKLOG`
 - **优先级**：mid
-- **目标**：每次路由留下「选了谁、为什么、是否降级」的记录（acceptance 第二节「可审计」）。
-- **开发范围**：结构化日志：`request_id / profile / matched_rule / candidates / chosen / degraded / latency`。**两道防线**（来自 iDoris-website 实现，Apache-2.0 可直接移植）：① 写入前对记录的**字段名**逐个比对黑名单（`prompt/prompts/input/content/text/body/messages/document/file/payload` 等 frozenset），命中即抛 `ContentLeakError` **拒绝写入**——不是静默丢弃（静默丢弃会让人以为内容被存下来了）；② 单字段 500 字符上限——长文本出现在元数据里，本身就是「有人把内容塞进来了」的信号。
+- **目标**：每次路由留下「选了谁、为什么、是否降级」的记录（acceptance「可审计」），且 tenant 模式下按租户隔离。
+- **开发范围**：结构化审计记录，字段**穷举白名单**见 [`spec.md`](spec.md)「审计记录（AuditRecord）」：`request_id / tenant_id / component / intent / privacy / tier / provider_id / model_id / tokens_in / tokens_out / cost_minor / latency_ms / status / reason / ts_utc`。**`reason` 必须非空且能区分四类**（`privacy_enforced` / `budget` / `intent_match` / `degraded`）——一句「routed」不合格。写入走 tenant 作用域（见 T1.5.3）。**两道防线**（来自 iDoris-website 实现，Apache-2.0 可直接移植）：① 写入前对记录的**字段名**逐个比对黑名单（`prompt/prompts/input/content/text/body/messages/document/file/payload` 等 frozenset），命中即抛 `ContentLeakError` **拒绝写入**——不是静默丢弃（静默丢弃会让人以为内容被存下来了）；② 单字段 500 字符上限——长文本出现在元数据里，本身就是「有人把内容塞进来了」的信号。
 - **明确不做**：**绝不记录请求或响应内容**（仅元数据）。
-- **依赖**：T1.3.3
-- **验收命令**：`pnpm test:audit`（① 哨兵字符串不出现在日志；② 含黑名单字段名的记录**抛错**而非被清洗后写入；③ 超 500 字符的字段被拒绝。对照 iDoris-website 的两条变异测试：「字段名不再比对禁用清单」「取消 500 字符上限」，改坏后必须变红）
+- **依赖**：T1.3.3、T1.5.3
+- **验收命令**：`pnpm test:audit`（① 哨兵字符串不出现在日志；② 含黑名单字段名的记录**抛错**而非被清洗后写入；③ 超 500 字符的字段被拒绝。对照 iDoris-website 的两条变异测试：「字段名不再比对禁用清单」「取消 500 字符上限」，改坏后必须变红）；④ **`reason` 为空的记录被拒绝**，且四类 reason 各有一条用例
 - **风险/回滚**：**涉隐私**——内容入日志等于隐私承诺作废，哨兵测试是硬性验收项
 - **证据**：<…>
 
@@ -326,6 +376,21 @@
 
 ---
 
+## F2.6 — 计费与账期
+
+### T2.6.1 按 tenant 的月度用量聚合 + 显式账期时区  `BACKLOG`
+- **优先级**：mid
+- **目标**：下游按此计费，所以「换台机器账单就变」是不可接受的失败模式。
+- **开发范围**：按 `tenant_id` 聚合月度用量与成本；月份边界**用租户显式配置的 `billing_timezone`**，`ts_utc` 存 UTC epoch，聚合时才做时区换算；提供余额与月度用量查询接口。
+- **明确不做**：不做发票/支付；不做跨租户账单汇总。
+- **依赖**：T1.5.3、T2.2.3
+- **交付物**：`packages/tenancy/src/billing.ts`
+- **验收命令**：`pnpm test:billing` —— 同一批数据在 `TZ=UTC` / `TZ=Asia/Bangkok` / `TZ=Pacific/Midway` 下聚合，断言**月度结果完全一致**。测试**必须真的切换进程时区**（`TZ` + `tzset()`）造数据；只在测试内部造时间戳的写法抓不到这个 bug
+- **风险/回滚**：**涉钱**——上游 iDoris-website 踩过真坑：月份边界用本地时区而时间戳存 UTC，同一笔曼谷 10-01 06:00 的调用在 UTC 算 9 月、在曼谷算 10 月，换机器账单就变且无任何报错；更阴的是当时测试也用本地时区造时间戳，两边一起漂，在任何时区都自洽地全绿
+- **证据**：<…>
+
+---
+
 ## F3.x — 自增长与联邦（M3，全部 BACKLOG）
 
 > 严格按 03 §5 的 F0 → F1 → F2 推进。**硬门禁：F3.4 隐私层就位前，真实个人数据不得进入联邦；F3.1/F3.3 只用合成/脱敏数据。**
@@ -357,6 +422,8 @@
 | FU-1 | U0 实测 | oMLX v0.4.3 VLM 引擎 guard 传播告警（`could not resolve scheduler for VLMBatchedEngine`），不阻塞，等新版 .app | OPEN |
 | FU-2 | U0 环境探测 | 本机 python 3.9.6，mlx-lm 训练可能需 3.10+，M3 开工前处理 | OPEN |
 | FU-3 | 05 §8 第 5 条 | 凭证网关（onecli 式 MITM）2026-09-07 拍板记 BACKLOG；architecture 已留 `CredentialProvider` 抽象位 | OPEN |
-| FU-4 | 跨仓库 | iDoris-website PR #4 `docs/11-来自Starter-Kit的需求.md`：R0 网关归属 + 多租户语义待拍板，见 [`progress.md`](progress.md) 阻塞项 | OPEN |
-| FU-5 | 跨仓库 R6 | 账期/时区：若将来引入计费，时区必须显式，且**回归测试要真的切换进程时区**（`TZ` + `tzset()`）跑多个时区同一套断言——只在测试内部造时间戳不动 TZ 的写法，会让 bug 在任何时区都自洽地变绿。本仓库当前无计费，暂不落 task | OPEN |
-| FU-6 | 跨仓库 R1 | `budget_exceeded` 已作为与 `local_only_unavailable` 同级的终态写进 [`spec.md`](spec.md) 状态机；对应的 routing policy 字段等 R0 定了归属再落 task | OPEN |
+| FU-4 | 跨仓库 | iDoris-website PR #4 的 R0（网关归属 + 多租户语义）**已拍板归 iDoris**（2026-09-07），落为 F1.5 + F2.6；下游 `products/gateway/` 降级为消费者 | CLOSED |
+| FU-5 | 跨仓库 R6 | 账期/时区：R0 归 iDoris 后，多租户用量聚合就在本层，**已从跟进项升为正式 task T2.6.1** | CLOSED |
+| FU-6 | 跨仓库 R1 | `budget_exceeded` 终态已写进 spec 状态机，**已落为 T1.5.2**；本仓库另加了一处细化：`budget.scope` 区分 `paid_only`/`all`，因为 iDoris 有零成本本地模型，一刀切会让超预算租户连不花钱的本地推理都用不了 | CLOSED |
+| FU-7 | 跨仓库移交 | 接收 iDoris-website 的 `routing.py`(10 条变异) / `audit.py` / `egress_guard.py`(16 条变异)，Apache-2.0；对方保留一份直到我方跑通，避免出现「两边都没有」的窗口 | OPEN |
+| FU-8 | 评审方法 | 警惕「断言因为错误的原因通过」：对方连续三次踩到（异常子类被父类 `expect_raises` 吞掉、无出处答案被数字校验误接住、某步骤因下限全是「至少」而根本不承重）。我方 `test:privacy` 的「出站计数器 == 0」、`test:egress` 的正对照、各处变异测试都是同一族防御 | OPEN |

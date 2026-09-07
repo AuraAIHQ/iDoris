@@ -1,7 +1,7 @@
 # iDoris 统一模型服务 实时状态 — progress
 
 > 「此刻仓库真实发生了什么」。由 `pilot run` 每一步更新。
-> 更新时间：2026-09-07 09:45
+> 更新时间：2026-09-07 10:30
 
 ## 当前聚焦
 - **Milestone**：M1 统一网关 MVP
@@ -24,21 +24,30 @@
 
 ## 阻塞项（BLOCKED）
 
-- **R0 · iDoris Router 的归属与多租户语义**（来自 iDoris-website PR #4，需 @jhfnetboy 拍板）
-  - **问题**：`iDoris-website` 的 `products/gateway/`（意图路由 + 成本闸 + 审计留痕）与本仓库 `01 §3` 的 iDoris Router **是同一层**，目前两套并行且没有任何文档写明关系。
-  - **结构性错配**：`01` 把 iDoris 定位为「**个人** AI 网关」（能力①硬编码 loopback + 单用户，社区/城市端禁转发订阅）；泰国业务是**托管多客户**，需要 `tenant` 维度的用量/预算/审计隔离。多租户只涉及能力②③，**不触碰能力①的订阅红线**。
-  - **两种答案**：(a) 归 iDoris → website 侧把 `products/gateway/` 降级为消费者，`routing.py` / `audit.py` / `egress_guard.py`（同为 Apache-2.0，含变异测试）整体移交；(b) 不归 iDoris → website 保留为泰国业务独立组件，两侧文档写明适用边界。
-  - **影响范围**：选 (a) 会给 M1 增加一个「部署模式 = personal | tenant」的维度，波及 T1.3.2（policy）、T1.4.2（egress 门禁）、T2.2.3（审计）；选 (b) 则 M1 完全不受影响。**在拍板前不动这三个 task 的多租户设计**。
 - **T2.5.2 三路由保真度矩阵**：缺 Anthropic + Gemini API key（用户凭证）；且无真实消费者。解除条件见 [`tasks.md`](tasks.md) 该 task。
 - **T3.4.1 DP-FedLoRA**：当前写不出可机器验证的验收命令，保持 BACKLOG 不进 READY，等 F3.3 跑通后细化。
 
+## R0 已拍板（2026-09-07）：多租户属于 iDoris，**iDoris 是组织大脑**
+
+用户原话：「多租户属于 iDoris 的范围，未来为组织提供服务，要提供多租户，iDoris 是组织大脑」。走 **(a)**：
+
+- **定位扩展而非推翻**：`01` 的「个人 AI 网关」是形态之一，不是全部。已在 [`research.md`](research.md) §2.5、[`architecture.md`](architecture.md) 核心判断 7 写明。
+- **新增 `deploy_mode: personal | tenant`** 正交维度；`X-iDoris-Tenant` 进控制面。
+- **新增 F1.5 多租户基线**（T1.5.1 契约 / T1.5.2 预算终态 / T1.5.3 硬隔离 / T1.5.4 reason）与 **F2.6 计费与账期**（T2.6.1）。
+- **原圈定的三个 task 已按多租户改**：T1.3.2（路由顺序 + tenant header）、T1.4.2（`deploy_mode != personal` 一律拒绝注册订阅 provider）、T2.2.3（审计字段白名单 + reason + tenant 作用域）。
+- **合规红线不松动**：多租户只作用于能力②③；能力① 在 `tenant` 模式下拒绝注册。
+- **对外契约已交付**：[`contract-tenancy.md`](contract-tenancy.md) v1 随本 PR 发布——下游 iDoris-website 已把 `products/gateway/` 降级为消费者并停工等它。
+- **移交在途**：对方的 `routing.py`(10 条变异) / `audit.py` / `egress_guard.py`(16 条变异)，Apache-2.0；对方保留一份直到我方跑通（FU-7）。
+
 ## 待人拍板的其余问题（不阻塞 M1 开工）
-- PR #4 的 R1–R6 中，**三条与 R0 无关、已直接采纳进本台账**（2026-09-07）：
+- PR #4 的 R1–R6 **已全部采纳**（2026-09-07）：
   - **R1** `budget_exceeded` 提升为与 `local_only_unavailable` **同级的拒绝终态**（共性：都不是重试/降级能解决的问题），已写进 [`spec.md`](spec.md) 状态机 + 失败分类；对应的 routing policy 字段等 R0 定了归属再落 task。
   - **R4** T2.2.3 补上字段名黑名单闸门 + 500 字符上限（原设计只有哨兵测试——哨兵证明「这次没漏」，闸门证明「结构上漏不出去」）。实现可从 iDoris-website `products/gateway/audit.py` 移植，同为 Apache-2.0。
   - **R5** 新增 **T1.3.6 出网启动断言**（含正对照）——运行期路由（`test:privacy`）与启动期部署配置是两个不同的洞，我们原本只有前者。
   - **R6** 账期时区记为 FU-5（本仓库当前无计费，暂不落 task）。
-- R0 归属未定前，`T1.3.2` / `T1.4.2` / `T2.2.3` 的多租户设计不动。
+  - **R2** 路由执行顺序（隐私判定必须排在意图匹配之前，否则「做 banner → 视觉模型」会先命中）已写进 [`spec.md`](spec.md) 并进 T1.3.2 验收。
+  - **R3** 决策 `reason` 可解释 → T1.5.4 + 审计字段。
+  - **R0** 见上节。
 - `test/cla-action-check` 分支（PR #1 已关闭未合并）是否废弃。
 
 ## 最近完成
@@ -47,5 +56,6 @@
 
 ## 下一个 READY
 - **T1.1.1** pnpm workspace 骨架 + 门禁流水线（无依赖）
-- **T1.1.2** 五份契约的 TS 类型 + zod schema（依赖 T1.1.1）
+- **T1.1.2** 契约的 TS 类型 + zod schema（依赖 T1.1.1）
 - **T1.1.3** 组件卡策略校验器（依赖 T1.1.2）
+- **T1.5.1** `deploy_mode` + TenantContext 契约（依赖 T1.1.2）—— **契约文档已交付，剩 TS 类型 + schema**；下游在等，优先级最高
