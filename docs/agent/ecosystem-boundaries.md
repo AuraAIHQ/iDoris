@@ -281,10 +281,12 @@ ADR-026 决议10 禁「临时 TS 版内核能力」的**理由与语言无关**�
 
 **而理解层切到 iDoris，正是解掉这笔账的办法**：那 7.3 GB 从 AgentEar 的进程预算里**移出去**，交给 iDoris 的 oMLX（它本来就在做多模型 + LRU + memory-guard 的内存编排，U0 已实测）。于是：
 
-| | AgentEar 常驻 | 结果 |
+| | AgentEar 自身进程预算 | 结果 |
 |:---|:---|:---|
-| 现状（自备 LLM）| TTS 1.8 + LLM 7.3 = **9.1 GB** | 贴着 9 GiB 上限，TTS 与理解层能否共存存疑 |
-| 切到 iDoris 后 | TTS 1.8 GB（+ ASR）| **腾出 7.3 GB**，M3 的资源约束消失 |
+| 现状（自备 LLM）| TTS 1.8 + LLM 7.3 = **9.1 GB** | 贴着 9 GiB 预算上限，TTS 与理解层能否共存存疑 |
+| 切到 iDoris 后 | TTS 1.8 GB（+ ASR）| **AgentEar 的预算腾出 7.3 GB** |
+
+> ⚠️ ADR-0002 §2.2 的 ≤9 GiB 是 **AgentEar 自己的进程预算**（Ornith 6bit 7.65 GiB + SenseVoice ~0.4 GiB），**不是整机上限**（那台 M1 Max 有 64 GB）。同机部署下不凭空多出物理内存，收益是「AgentEar 预算腾空」+「那部分交给 oMLX 后变成可驱逐的」；异机部署（Mac mini + Tailscale）才真正腾出物理内存。详见 [`voice-duplex-assessment.md`](voice-duplex-assessment.md) §4。
 
 **所以 B3 的两件事有先后**：「理解层切 iDoris」应排在「TTS 选型落地」**之前**，否则 M3 会在一个本可以避免的内存约束下做选型（可能因此排除掉更大更好的 TTS 模型）。
 
