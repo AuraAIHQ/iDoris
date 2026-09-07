@@ -112,7 +112,7 @@ ADR-0005 已经查清四条，每一条都在插拔层之外：
 
 1. **先把理解层切到 iDoris** —— 不是为了少维护一个 LLM，是为了**解掉 M3 的资源账**：现在 TTS 1.8 GB + 常驻 LLM 7.3 GB ≈ 9.1 GB 已贴着 ≤9 GiB。**在这之前做 TTS 选型，会在一个本可避免的约束下排除掉更好的模型。**
 
-   > ⚠️ **前提必须写明，因为整个优先级变更都压在这一格上。** ADR-0002 §2.2 的 ≤9 GiB 是 **AgentEar 自己的进程预算**（常驻 Ornith 6bit 7.65 GiB + SenseVoice 子进程 ~0.4 GiB ≈ 9 GiB 峰值），**不是整机上限**——那台 M1 Max 有 64 GB。所以「切到 iDoris」在**同机部署**下并不凭空多出 7.3 GB 物理内存，收益来自两处：
+   > ⚠️ **前提必须写明，因为整个优先级变更都压在这一格上。** ADR-0002 §2.2 的 ≤9 GiB 是 **AgentEar 自己的进程预算**（**三项**：常驻 Ornith 6bit 7.65 GiB **+ KV cache 64K 上下文 ~1 GiB** + 按需的 SenseVoice 子进程 ~0.4 GiB ≈ 9 GiB 峰值），**不是整机上限**——那台 M1 Max 有 64 GB。所以「切到 iDoris」在**同机部署**下并不凭空多出 7.3 GB 物理内存，收益来自两处：
    > ① **AgentEar 自己的预算真的腾空了**，TTS 选型不再被这条自设约束卡住；
    > ② 那部分内存交给 oMLX 后**变成可驱逐的**（LRU + memory-guard，U0 已实测），而 AgentEar 自己常驻的 LLM 边车做不到——TTS 要内存时它不会让路。
    > **异机部署**（iDoris 跑 Mac mini + Tailscale，见 [`architecture.md`](architecture.md) 运行形态）下才是真正腾出物理内存。两种部署收益不同，但**都足以解除 M3 的选型约束**。
