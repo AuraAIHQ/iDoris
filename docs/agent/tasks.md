@@ -185,7 +185,7 @@
 - **明确不做**：不做 streaming（CLI 非交互模式先按整块返回）；不做 OAuth 路径（CLIProxyAPI 模式，备选）。
 - **依赖**：T1.3.1
 - **交付物**：`packages/adapters/subscription/`
-- **验收命令**：`pnpm --filter @idoris/adapters test:integration`（① 本机有 `claude` 时断言 `claude -p "reply with exactly: IDORIS_RELAY_OK"` 经网关返回该字符串；② 进程清理断言 `ps` 无残留子进程；③ **沙箱断言：喂一个诱导写文件/调工具的 prompt，断言文件系统无变化、无子进程被 spawn**；④ 无 CLI 时打印 SKIPPED）
+- **验收命令**：`pnpm --filter @idoris/adapters test:integration`（① 本机有 `claude` 时断言 `claude -p "reply with exactly: IDORIS_RELAY_OK"` 经网关返回该字符串；② 进程清理断言 `ps` 无残留子进程；③ **沙箱断言**：喂一个诱导写文件/调工具的 prompt，断言文件系统无变化；**子进程断言是「只有那个固定二进制及其必要运行时被 spawn」，不是「零子进程」**（CLI 自己要联网读凭据，零子进程跑不起来）；另断言网络目的地、输入目录、凭据范围、输出大小四项限制生效；④ 无 CLI 时打印 SKIPPED）
 - **涉及文件**：`packages/adapters/subscription/`
 - **风险/回滚**：孤儿进程会吃满机器 —— 清理断言是硬性验收项
 - **证据**：<…>
@@ -429,5 +429,6 @@
 | FU-7 | 跨仓库移交 | 接收 iDoris-website 的 `routing.py`(10 条变异) / `audit.py` / `egress_guard.py`(16 条变异)，Apache-2.0；对方保留一份直到我方跑通，避免出现「两边都没有」的窗口 | OPEN |
 | FU-9 | 生态边界 | [`ecosystem-boundaries.md`](ecosystem-boundaries.md) §7 四条待拍板：B1 双 harness 二选一（**最迫近**，下游已在跑 B）· B2 MemPalace 独立与否 · B3 agentEar 立项与归属 · B4 模型制品层时机 | OPEN |
 | FU-10 | 跨仓库 | iDoris-website `docs/business/INDEX-产品设计总览.md` §3 的「113 条变异」与「没有一条连过模型」范围不符：Documents 72 + Creative 15 = **87** 才是该句点名的范围；Assistant 16 + Gateway 10 那 26 条不在「连没连过模型」这个轴上（测的是启动期环境变量与路由顺序），被那句话罩住反显得更空。已转告作者 | OPEN |
+| FU-12 | 评审 | codex 指出 B1 最可能在六个月后被推翻，**触发条件很低**：出现第一条同时依赖内容+收件人+渠道+副作用的策略即可（如「金额超 ฿10,000 或群聊含非客户成员时，发账单必须人工批准」）。届时会改成「Python 提供签名的领域校验证据，Rust 持唯一授权状态机与最终否决权」——本稿已按这个形状写，但要盯着别退回「动作/输出互不重叠」的旧说法 | OPEN |
 | FU-11 | License 红线（自下游 `oss-due-diligence.md` 引入）| **LiteLLM `enterprise/` 目录绝不引用**（若将来做能力②）· **Dify 禁多租户**——多租户现已归 iDoris，此条直接约束选型 · ComfyUI GPL 只能隔离进程调用 | OPEN |
 | FU-8 | 验收方法论 | **「绿灯不代表你以为的那件事成立」**——两半：① **断言错了**（异常子类被父类 `expect_raises` 吞掉；无出处答案被数字校验误接住，换成不含数字的答案就放行）；② **检查不承重**（某步骤去掉后整套自检仍全绿）。<br>**根因常是量纲不匹配**：判据全写成「至少有 N 个」，而想抓的错误方向是「你多算了」——「至少」型判据测不出多算，那格正对照**从一开始就不可能承重**。**检查的量纲要和它想抓的错误方向对得上。**<br>我方对应防御：`test:privacy` 的出站计数器（不只断言 503）、`test:billing` 的 `range_utc`（不只断言 totals）、`test:egress` 的正对照、T1.5.2/3/4 的配对变异测试。共同点是**不给自己留一条「看起来做了」的退路**。<br>**待办**：把这条写进未来每个 task 的验收设计检查——新增验收命令时问一句「这个断言能不能因为别的原因变绿？它的量纲对得上要抓的错误方向吗？」 | OPEN |
