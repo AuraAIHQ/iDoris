@@ -27,15 +27,24 @@
 
 你们 `verification-2026-09-06-voice-stack.md` 的结论是「faster-whisper 停更 9 个月而后端仍在发版」。**AgentEar 根本没用 faster-whisper**，用的是 FunASR/SenseVoice + llamacpp runtime。
 
-**那条风险作废，但要换成新的**：主链路依赖 `modelscope/FunASR` 的 `runtime-llamacpp` 发布产物，且 `docs/asr-selection.md` 记着 SenseVoice-Small **官方标注「即将停止维护」**。风险形状变了，不是消失了 —— 建议你们把核查项改写而不是删掉。
+**新风险只有一条**：主链路依赖 `modelscope/FunASR` 的 `runtime-llamacpp-*` 发布产物。对策不是只锁版本号 —— **要自留一份产物副本，版本号挡不住上游删 release**（这条对策由 iDoris-website 补充）。
 
-### 2.2 🔴 Apple Silicon 限定，与「Voice 可单独部署在客户机器上」冲突
+> **🔧 更正（2026-09-07，由 iDoris-website 核出）**：本文早先版本还写了「SenseVoice-Small 官方标注即将停止维护」。**该说法不成立，已删除。**
+> 我引的是 AgentEar `docs/asr-selection.md` §1，而那句已被同仓库的 `docs/decisions/0001-asr-model-selection.md` §3「更正一处早先的错误」撤销：来源是厂商博客的二手说法，核实后 GitHub `QwenAudio/SenseVoice` 未 archive、最后提交 2026-07-27、8951 stars，HF 下载量 5755 高于 Fun-ASR-Nano-GGUF 的 4813。ADR 原话是「这曾是排除 SenseVoice 的主要理由，它站不住」。
+> **我的错误形态值得记**：那份文档顶部的横幅明说「选型结论已作废」，我读到了，但仍引用了横幅之下的一句具体事实——**「结论作废」不等于「其中每条事实都已被逐条更正」，也不等于「没被更正的就还有效」**。正确做法是顺着它指向的 ADR 读完再引。
 
-你们 `starter-kit/README.md` §5 写的例外是「数据敏感度高的客户，Voice 可以单独部署在他们机器上」。
+### 2.2 🔴 交付形态受限（**范围已收窄**，见更正）
 
-**但 AgentEar 不支持 Intel，也不支持 Windows/Linux** —— 而且这不是「暂时没做」：上游 FunASR 的 macOS 产物从 `v0.1.9` 到 `v0.2.6` **只有 `macos-arm64`**（Linux/Windows 才有 x64）。就算主程序编成通用二进制，Intel 上 ASR 子进程照样起不来。
+你们 `starter-kit/README.md` §5 写的例外是「数据敏感度高的客户，Voice 可以单独部署在他们机器上」。这句要分三层看：
 
-**所以「部署到客户机器」这个承诺，目前只对用 Apple Silicon Mac 的客户成立。** 清迈的小生意用什么机器，这是你们比我清楚的事 —— 但它得先被知道。
+| 平台 | 状态 |
+|:---|:---|
+| **Apple Silicon Mac** | ✅ 下载 `.app` 即用，AgentEar 的目标形态 |
+| **Intel Mac** | ❌ **不成立**，且不是「暂时没做」——上游 FunASR 的 macOS 产物从 `v0.1.9` 到 `v0.2.6` 只有 `macos-arm64`。主程序编成通用二进制也没用，ASR 子进程起不来 |
+| **Linux / Windows** | ⚠️ **路存在但要自己组装**（未实测）：上游有 `linux-x64`/`-avx2`/`-vulkan`/`linux-arm64`/`windows-x64`（含 CUDA）产物，但 AgentEar 的 `.app` 交付形态不覆盖它们 |
+
+> **🔧 更正（2026-09-07，由 iDoris-website 逐个 tag 核出）**：本文早先版本写的是「Apple Silicon 限定，不支持 Windows/Linux」。**过度概括了。**
+> 讽刺的是 AgentEar README 原文的括号里就写着「（Linux/Windows 才有 x64）」——**我读的是同一句话，却把它的限定词读丢了**。不成立的只有 **Intel Mac** 与「下载 `.app` 就能用」这个交付形态。
 
 ### 2.3 AgentEar 的理解层**已经在消费一个 OpenAI-compat 本地端点**
 
@@ -46,5 +55,25 @@
 ## 3. 对你们的建议
 
 1. **V0 判定为「已完成」**，答案在本文档 §1，不必再等 iDoris —— 你们的 V1（锁版本 + GPU 路径验证）可以直接开工，但对象是 AgentEar 的 `vendor/bin` 产物版本，不是 faster-whisper × ctranslate2 那一对。
-2. **V2 泰语评测基线仍然要做，而且更要做** —— AgentEar 有泰语引擎但主链路 SenseVoice 明确不覆盖泰语，你们要的「20 段真实泰语音频、字符错误率有数字」在 AgentEar 侧也还没有。这条是你们和 AgentEar 都受益的交付物。
+2. **V2 泰语评测基线仍然要做 —— 但理由不是「没人测过」，而是「测的不是你们的场景」。**
+   > **🔧 更正**：本文早先版本说「AgentEar 侧也还没有这个数」。**错了，他们有两批**：`docs/data/thai-cer-stats.txt`（FLEURS 朗读语料 n=80、六模型、自助法 4000 次 95% CI，最好 `ggml-medium-q8_0` CER **6.08%** [4.41%, 7.89%]）与 `docs/data/thai-corpus-arm-2026-09/RESULTS.md`（code-switch 22 条：纯泰 3.9%、夹英文 31.1%、加 initial prompt 降到 18.4%）。
+   > **这条错误比事实本身更值得记：我断言了一个「不存在」，而我根本没去 `docs/data/` 看过。** 断言缺席的举证责任和断言存在一样重，但我当时没有对它施加同等要求。
+
+   **真正的理由更强**：那两批是**朗读语料、安静、单人**，且 AgentEar 自己标注了 FLEURS 被 Thonburian 模型卡**声明为训练数据**。所以 6.08% 不能进销售话术，而你们客户的会议室/电话/噪声场景确实没人测过。
+   **这让 V2 变便宜而不是变贵** —— 直接复用他们的 `cer-thai.py` / `cer-stats.py` / `reference.tsv` 格式 / `thai-recorder.html`。
 3. **先确认客户机器架构**，再决定 §2.2 那个承诺怎么措辞。
+4. **AgentEar 成果能否直接用 —— 许可这条有现成答案**，见 §4。
+
+## 4. 许可：AgentEar 的成果可以用（回答你们新开的 [待核]）
+
+| 项 | 许可 | 依据 |
+|:---|:---|:---|
+| AgentEar 本体 | **Apache-2.0** | 仓库 `LICENSE` |
+| FunASR llamacpp runtime | **MIT** | `NOTICE`（版本 `runtime-llamacpp-v0.1.9`）|
+| SenseVoiceSmall q8 GGUF | **Apache-2.0** | `NOTICE` |
+| FSMN-VAD | **Apache-2.0** | `NOTICE` |
+| **泰语 GGML（转换后权重）** | **MIT** | `docs/decisions/0004-thai-asr-engine.md`：上游 `biodatlab/distill-whisper-th-large-v3` 是 MIT，**再分发只需保留版权声明**；Release 说明已注明出处、revision 与许可 |
+
+**「托管转换后 GGML 权重的再分发义务」这一条 AgentEar 已经核过并确认完毕**——`plan-i18n-thai.md` §4 原本要求「在确认再分发义务之前不要开始托管」，MIT 这一条确认完毕。
+
+⚠️ **但有一个附带条件，而且大概率会落到你们头上**：ADR 明写「如果日后换成 Apache-2.0 的 `medium`，NOTICE 义务要重新过一遍」。而 CER 最好的那个模型**正是 `ggml-medium-q8_0`（6.08%）** —— 所以**一旦你们据 CER 选了 `medium`，许可结论不能沿用 MIT 这条，要重核**。
