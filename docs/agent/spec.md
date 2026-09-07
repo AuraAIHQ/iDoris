@@ -102,18 +102,19 @@ routing_policy:
 
 ### 请求路由状态机（Router 核心）
 ```
-RECEIVED ──▶ PROFILED ──▶ POLICY_MATCHED ──▶ CANDIDATES ──▶ ADMITTED ──▶ DISPATCHED ──▶ DONE
-                                                  │             │            │
-                                                  │             │            └─▶ FAILED ─┐
-                                                  │             └─▶ EVICT_THEN_LOAD ─────┤
-                                                  ▼                                       │
-                                            NO_CANDIDATE                                  │
-                                                  │                                       ▼
-                                    fail_closed? ─┴─ yes ─▶ REJECTED_LOCAL_ONLY      DEGRADE
-                                                   └─ no ──▶ next_in_chain ──────────▶ (回 CANDIDATES)
+RECEIVED ─▶ PROFILED ─▶ POLICY_MATCHED ─▶ BUDGET_CHECK ─▶ CANDIDATES ─▶ ADMITTED ─▶ DISPATCHED ─▶ DONE
+                                              │               │           │            │
+                              over budget ────┘               │           │            └─▶ FAILED ─┐
+                                    │                         │           └─▶ EVICT_THEN_LOAD ─────┤
+                                    ▼                         ▼                                     │
+                          REJECTED_BUDGET (终态,402)     NO_CANDIDATE                                │
+                                                              │                                     ▼
+                                              fail_closed? ───┴── yes ─▶ REJECTED_LOCAL_ONLY   DEGRADE
+                                                              └── no ──▶ next_in_chain ──▶ (回 CANDIDATES)
 ```
 - `REJECTED_LOCAL_ONLY` 是**终态**，返回 HTTP 503 + `{"error":{"type":"local_only_unavailable"}}`，**不得**转向任何 `locality != loopback` 的 provider。
-- `DEGRADE` 仅在 `fallback_policy: next_in_chain` 且 `privacy != local_only` 时可达。
+- `REJECTED_BUDGET` 是**同级终态**，返回 HTTP 402 + `{"error":{"type":"budget_exceeded"}}`。预算检查在 `POLICY_MATCHED` 之后、`CANDIDATES` 之前——**先于任何候选选择**，因为再便宜的候选也是花钱。
+- `DEGRADE` 仅在 `fallback_policy: next_in_chain` 且 `privacy != local_only` **且未触发预算终态**时可达。
 
 ### 模型生命周期（LoadPolicy）
 ```
@@ -132,7 +133,8 @@ DISCOVERED ──schema 校验──▶ VALID ──策略字段校验──▶ 
 
 ## 错误处理 / 幂等
 
-- **失败分类**：`upstream_timeout` / `upstream_5xx` / `oom` / `model_load_failed` / `local_only_unavailable` / `policy_violation`。前四类可触发降级链（受 `fallback_policy` 约束），后两类**终态不重试**。
+- **失败分类**：`upstream_timeout` / `upstream_5xx` / `oom` / `model_load_failed` / `local_only_unavailable` / `budget_exceeded` / `policy_violation`。前四类可触发降级链（受 `fallback_policy` 约束），后三类**终态不重试**。
+- **两个拒绝终态的共性（重要）**：`local_only_unavailable` 与 `budget_exceeded` 在状态机里**同级**，共性是「都不是重试或降级能解决的问题」。前者是隐私约束；后者是**商业约束**——客户设了预算上限就是不想再花钱，自动降级等于替他决定「继续花，只是花得少些」，而悄悄降级的账单等客户看到时钱已经花了。技术性降级（忙 / OOM / 超时）与商业性拒绝必须走不同出口。
 - **重试**：仅对幂等的 `POST /v1/chat/completions`（非 streaming）做最多 2 次退避重试（250ms → 1s，jitter）。streaming 请求**已开始吐 token 后不重试**，直接以 SSE error 事件终止。
 - **幂等键**：可选 `X-iDoris-Request-Id`；相同 id 在 60s 窗口内命中缓存的终态结果，避免中转 CLI 被重复 spawn。
 - **health / cooldown**：复用 Agent24 `ModelRouter` 语义——连续 3 次失败进 `COOLDOWN 30s`，期间该 provider 不参与候选。
@@ -146,6 +148,8 @@ DISCOVERED ──schema 校验──▶ VALID ──策略字段校验──▶ 
 | **单测** | 内存公式、量化 bpp 表、policy 规则匹配顺序、TaskProfile header 解析（含缺省与非法值）| `pnpm test` |
 | **契约测试（zod schema）** | 五份契约的合法/非法样例；**非法样例必须被拒绝**（缺 privacy_class、tier=local+locality=remote 等）| `pnpm test:contract` |
 | **隐私回归测试（最高优先级）** | 停掉全部本地 provider，发 N 条 `local_only` 请求，断言 **N 条全部 503、0 条出站**（用假上游 + 出站计数器断言）| `pnpm test:privacy` |
+| **出网启动断言** | 进程启动后、处理任何请求前，socket 层打桩拒绝所有非本机连接，断言零出网。**必须配正对照**（一个刻意出网的用例要被探针抓到）—— 抓不到出网的探针，它报的「零出网」什么都不证明 | `pnpm test:egress` |
+| **审计内容闸门** | 字段名黑名单比对 + 单字段长度上限，命中即**抛错拒绝写入**（不是静默丢弃 —— 静默丢弃会让人以为内容被存下来了）| `pnpm test:audit` |
 | **黄金一致性测试（L3）** | 同一组请求分别打到 oMLX 适配器与 mock 适配器，断言 LoadPolicy 语义等价 —— 这是「可替换」承诺的唯一凭证 | `pnpm test:golden` |
 | **集成测试** | 真起 oMLX（若本机可用）跑 load/evict/warm-hit 序列；不可用时 skip 并明确打印 SKIPPED，**不得静默通过** | `pnpm test:integration` |
 | **冒烟** | `curl /v1/models`、标准 openai SDK 调通、streaming 首 token | `pnpm smoke` |

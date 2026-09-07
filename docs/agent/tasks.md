@@ -161,6 +161,18 @@
 - **验收命令**：`pnpm --filter @idoris/router test`（并发 10 个需要互相驱逐的请求，断言无死锁、无超过 10s 的等待、全部有终态）
 - **证据**：<…>
 
+### T1.3.6 出网启动断言（启动期部署配置，与运行期路由是两个洞）  `BACKLOG`
+- **优先级**：mid
+- **目标**：证明 Router 进程在**处理任何请求之前**不会自己出网——`test:privacy` 测的是运行期路由，这条测的是启动期部署配置，两者抓不到对方的问题。
+- **开发范围**：socket 层打桩拒绝所有非本机连接，启动 Router 后断言零出网；**必须配正对照**：一个刻意出网的用例要被探针抓到——抓不到出网的探针，它报的「零出网」什么都不证明。
+- **明确不做**：不做运行期出站管控（那是 T1.4.2 的 egress-guard）。
+- **依赖**：T1.3.1
+- **交付物**：`packages/router/test/egress-probe.ts`（含正对照用例）
+- **验收命令**：`pnpm test:egress`（零出网断言通过 **且** 正对照用例确实被探针捕获；正对照不红即判本 task 未完成）
+- **涉及文件**：`packages/router/test/`
+- **风险/回滚**：**涉隐私**——参考实测：某些库不设变量时零出网，但设了 tracing 类环境变量后会连外部端点。风险不在库，在部署配置
+- **证据**：<…>
+
 ---
 
 ## F1.4 — 能力① 订阅中转（可选 / best-effort）
@@ -252,10 +264,10 @@
 ### T2.2.3 路由决策审计日志  `BACKLOG`
 - **优先级**：mid
 - **目标**：每次路由留下「选了谁、为什么、是否降级」的记录（acceptance 第二节「可审计」）。
-- **开发范围**：结构化日志：`request_id / profile / matched_rule / candidates / chosen / degraded / latency`。
+- **开发范围**：结构化日志：`request_id / profile / matched_rule / candidates / chosen / degraded / latency`。**两道防线**（来自 iDoris-website 实现，Apache-2.0 可直接移植）：① 写入前对记录的**字段名**逐个比对黑名单（`prompt/prompts/input/content/text/body/messages/document/file/payload` 等 frozenset），命中即抛 `ContentLeakError` **拒绝写入**——不是静默丢弃（静默丢弃会让人以为内容被存下来了）；② 单字段 500 字符上限——长文本出现在元数据里，本身就是「有人把内容塞进来了」的信号。
 - **明确不做**：**绝不记录请求或响应内容**（仅元数据）。
 - **依赖**：T1.3.3
-- **验收命令**：`pnpm --filter @idoris/router test`（断言日志行含全部字段，且断言日志中**不出现** prompt/completion 内容——用哨兵字符串验证）
+- **验收命令**：`pnpm test:audit`（① 哨兵字符串不出现在日志；② 含黑名单字段名的记录**抛错**而非被清洗后写入；③ 超 500 字符的字段被拒绝。对照 iDoris-website 的两条变异测试：「字段名不再比对禁用清单」「取消 500 字符上限」，改坏后必须变红）
 - **风险/回滚**：**涉隐私**——内容入日志等于隐私承诺作废，哨兵测试是硬性验收项
 - **证据**：<…>
 
@@ -346,3 +358,5 @@
 | FU-2 | U0 环境探测 | 本机 python 3.9.6，mlx-lm 训练可能需 3.10+，M3 开工前处理 | OPEN |
 | FU-3 | 05 §8 第 5 条 | 凭证网关（onecli 式 MITM）2026-09-07 拍板记 BACKLOG；architecture 已留 `CredentialProvider` 抽象位 | OPEN |
 | FU-4 | 跨仓库 | iDoris-website PR #4 `docs/11-来自Starter-Kit的需求.md`：R0 网关归属 + 多租户语义待拍板，见 [`progress.md`](progress.md) 阻塞项 | OPEN |
+| FU-5 | 跨仓库 R6 | 账期/时区：若将来引入计费，时区必须显式，且**回归测试要真的切换进程时区**（`TZ` + `tzset()`）跑多个时区同一套断言——只在测试内部造时间戳不动 TZ 的写法，会让 bug 在任何时区都自洽地变绿。本仓库当前无计费，暂不落 task | OPEN |
+| FU-6 | 跨仓库 R1 | `budget_exceeded` 已作为与 `local_only_unavailable` 同级的终态写进 [`spec.md`](spec.md) 状态机；对应的 routing policy 字段等 R0 定了归属再落 task | OPEN |
