@@ -112,7 +112,23 @@ GET /idoris/tenants/{tenant_id}/usage?period=2026-09     # 月度用量与成本
 GET /idoris/tenants/{tenant_id}/budget                   # 余额
 GET /idoris/tenants/{tenant_id}/audit?from=&to=&limit=   # 审计记录（仅元数据）
 ```
-月份边界一律按该租户的 `billing_timezone` 解释。**同一批数据在任何时区的机器上聚合，月度结果必须完全一致**——这是硬保证，不是尽力而为。
+
+**`period` 的时区语义（计费依据，务必读）**：
+`period=2026-09` **一律按该租户 `TenantContext.billing_timezone` 解释**，**绝不使用服务器本地时区**，也不接受调用方在查询里另指定时区（避免同一租户不同调用方切出不同的月）。
+
+**响应必须回显边界，让调用方能验证而不是只能信任**：
+```json
+{
+  "tenant_id": "acme-co",
+  "period": "2026-09",
+  "billing_timezone": "Asia/Bangkok",
+  "range_utc": {"from": "2026-08-31T17:00:00Z", "to": "2026-09-30T17:00:00Z"},
+  "totals": {"cost_minor": 1234567, "tokens_in": 0, "tokens_out": 0, "calls": 0}
+}
+```
+`billing_timezone` 与 `range_utc` 是**响应的必填字段**。理由：这个坑（换台机器部署账单就变、且没有任何东西报错）的隐蔽之处在于**两边都没有可对账的凭据**。把解析出的 UTC 边界回显出来，调用方可以直接断言它，错了当场看得见。
+
+**硬保证**：同一批数据在任何时区的机器上聚合，`totals` 与 `range_utc` 必须完全一致——不是尽力而为。
 
 ## 7. 消费方迁移清单
 
