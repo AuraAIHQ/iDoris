@@ -262,10 +262,37 @@ ADR-026 决议10 禁「临时 TS 版内核能力」的**理由与语言无关**�
 产出设计文档（下载来源、哈希与签名校验、许可、版本固定、LoRA 归属、磁盘配额、灰度回滚、多运行时共享缓存、离线安装），**不进 M1 实现**。
 > 设计时带上本轮学到的门禁形状：**把待核项挂在具体动作前面，而不是挂在待办列表里**——AgentEar 的 `plan-i18n-thai.md` §4 立的是「在确认再分发义务之前不要开始托管」，不是「记得核一下许可」。列表不产生阻力，动作前置的门禁才产生阻力。
 
+### B5 — AgentEar TTS 方言判定：**腔调不对（2026-09-07 jason 听音）**
+
+`nan_tw_000.wav` **不是台湾闽南语**。ADR-0005 因此落到**情形 B**：OmniVoice 声称的「646+ 语言」**不覆盖台湾闽南语**，它不能作为方言方案的单一候选。
+
+**后果**（ADR-0005 §3 情形 B 已预写）：
+- 要么换模型：先验证 `MERaLiON-OmniVoice-Hokkien` 与 `mlx-community/OmniVoice-bf16` **是否同源**（都叫 OmniVoice、都有 `audio_tokenizer` 子目录，架构上很可能同基座）。若同源，那份闽南语微调权重可转 MLX 再用 mlx-audio 跑 —— **和泰语 whisper 那次是同一套路数**（转换 + 量化 + 校验指纹）。
+- ⚠️ **但那是新加坡闽南语，不是台湾话。** 台湾话对口的是 `BreezyVoice-Taigi`，**能否在 Apple Silicon 上跑完全没测**。
+- 要么按 ADR §4 的三条走向之一推迟方言（jason 自己说过「先完成普通话或先完成英语都可以」）。
+
+> **顺带**：OmniVoice 那个候选还有一处独立的硬伤 —— `mlx-community/OmniVoice-bf16` **无模型卡、无许可标注**，而我们要随包分发或按需下载。就算腔调对了，许可这关也得先过。
+
+### B3 补充 — 「理解层切 iDoris」不是「不着急」，它是 M3 的前置
+
+原判「需要设计，不着急，不进 M1」。**但资源账把它变成了 M3 的依赖**：
+
+`milestones.md` M3 的原文写着 —— TTS 1.8 GB + M2 常驻 LLM 7.3 GB ≈ **9.1 GB，已贴着 ADR-0002 的 ≤9 GiB 上限**，并注明「两者能否同时常驻是个独立于选型的问题」。
+
+**而理解层切到 iDoris，正是解掉这笔账的办法**：那 7.3 GB 从 AgentEar 的进程预算里**移出去**，交给 iDoris 的 oMLX（它本来就在做多模型 + LRU + memory-guard 的内存编排，U0 已实测）。于是：
+
+| | AgentEar 自身进程预算 | 结果 |
+|:---|:---|:---|
+| 现状（自备 LLM）| TTS 1.8 + LLM 7.3 = **9.1 GB** | 贴着 9 GiB 预算上限，TTS 与理解层能否共存存疑 |
+| 切到 iDoris 后 | TTS 1.8 GB（+ ASR）| **AgentEar 的预算腾出 7.3 GB** |
+
+> ⚠️ ADR-0002 §2.2 的 ≤9 GiB 是 **AgentEar 自己的进程预算**（三项：Ornith 6bit 7.65 GiB + KV cache 64K ~1 GiB + SenseVoice ~0.4 GiB），**不是整机上限**（那台 M1 Max 有 64 GB）。同机部署下不凭空多出物理内存，收益是「AgentEar 预算腾空」+「那部分交给 oMLX 后变成可驱逐的」；异机部署（Mac mini + Tailscale）才真正腾出物理内存。详见 [`voice-duplex-assessment.md`](voice-duplex-assessment.md) §4。
+
+**所以 B3 的两件事有先后**：「理解层切 iDoris」应排在「TTS 选型落地」**之前**，否则 M3 会在一个本可以避免的内存约束下做选型（可能因此排除掉更大更好的 TTS 模型）。
+
 ## 8. 仍待拍板
 
 | # | 问题 | 为什么必须有人定 |
 |:---|:---|:---|
-| **B5** | AgentEar TTS：`~/Desktop/agentear-tts-samples/nan_tw_000.wav` 是闽南语还是普通话腔调念的闽南语汉字 | **只有人耳能判**，卡着 ADR-0005 从草稿转正，进而卡着整条「说」的方向 |
 | **B6** | 「动作审批」的 sunset 条件：Rust 权限门达到什么状态即开始切流 | 已冻结 Python 侧不再长新权限模型，但没有 sunset 条件就等于无限期冻结 |
 | **B7** | 跨组件 tenant 传播的签名凭据契约（iDoris 签发、Agent24/MemPalace 验证） | 现在只有 iDoris 一个组件消费 tenant，够用；**第二个组件一旦消费，就会出现两套 tenant 真相** |
